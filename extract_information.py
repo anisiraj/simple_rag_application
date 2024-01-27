@@ -1,17 +1,24 @@
 from pymongo import MongoClient
 from langchain_community.vectorstores import MongoDBAtlasVectorSearch
 from langchain_community.document_loaders import DirectoryLoader
-from langchain_community.llms import OpenAI
+from langchain_community.llms import OpenAI,LlamaCpp
 from langchain.chains import RetrievalQA
 import gradio as gr
 from gradio.themes.base import Base
 import key_param
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.embeddings import HuggingFaceEmbeddings
+import os
+from functools import partial
+
+from langchain import HuggingFaceHub
+
+os.environ["HUGGINGFACEHUB_API_TOKEN"] = key_param.HF_TOKEN
+
 
 client=MongoClient(key_param.MONGO_URI)
 dbName='langchain_demo'
-
+from langchain_experimental.chat_models import Llama2Chat
 
 collectionName='collection_of_text_blobs'
 collection=client[dbName][collectionName]
@@ -21,22 +28,36 @@ data=loader.load()
 
 embeddings=OpenAIEmbeddings(openai_api_key=key_param.openai_api_key)
 # embeddings = HuggingFaceEmbeddings(model_name='all-MiniLM-L6-v2',
-#                                        model_kwargs={'device': 'cpu'})
+#                                        model_kwargs={'device': 'cuda'})
 
 vectorStore=MongoDBAtlasVectorSearch(collection,embeddings)
 
+    
 def query_data(query):
     #simple atlas vector search
-    docs=vectorStore.similarity_search(query,K=1)
-    as_output=dict(docs[0])
+    docs=vectorStore.similarity_search(query,K=3)
+    reading_refs=[]
+    for doc in docs:
+        doc=dict(doc)
+        meta=doc.get("metadata",{})
+        reading_refs.append(
+            {
+                "source":meta.get("source","").split("/")[-1],
+                "page":meta.get("page",0),               
+                
+            }
+            
+        )
+    
     
     #gpt 3.5 chain
     llm=OpenAI(api_key=key_param.openai_api_key,temperature=0)    
+    # https://huggingface.co/google/flan-t5-xl
+    #llm = HuggingFaceHub(repo_id = "google/flan-t5-xxl", model_kwargs={"temperature":0, "max_length":64})    
     retriever = vectorStore.as_retriever()
     qa = RetrievalQA.from_chain_type(llm, chain_type="stuff", retriever=retriever)
     retriever_output = qa.run(query)
-    return as_output,retriever_output
-
+    return reading_refs,retriever_output
 
 
 with gr.Blocks(theme=Base(), title="Question Answering App using Vector Search + RAG") as demo:
